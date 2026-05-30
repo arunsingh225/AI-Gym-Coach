@@ -1,5 +1,8 @@
-import streamlit as st
+import sys
 import os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+import streamlit as st
 import time
 import pandas as pd
 from services.auth.login_wall import render_login_wall
