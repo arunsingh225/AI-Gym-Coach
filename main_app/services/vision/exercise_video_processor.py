@@ -1,7 +1,6 @@
 import cv2
 import av
 import numpy as np
-import mediapipe as mp
 import threading
 from streamlit_webrtc import VideoProcessorBase
 from detectors.squat import SquatDetector
@@ -11,6 +10,17 @@ from detectors.shoulder_press import ShoulderPressDetector
 from detectors.lunges import LungesDetector
 from services.config.workout_config import POSE_CONNECTIONS
 
+import mediapipe as mp
+from mediapipe.tasks import python as mp_python
+from mediapipe.tasks.python import vision
+from mediapipe.tasks.python.components import containers
+import os
+
+
+def _get_model_path():
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.normpath(os.path.join(here, "..", "..", "ml_models", "pose_landmarker_full.task"))
+
 
 class VideoProcessorClass(VideoProcessorBase):
     def __init__(self):
@@ -18,13 +28,20 @@ class VideoProcessorClass(VideoProcessorBase):
         self._latest_metrics = None
         self._exercise_type = "Squats"
 
-        self._pose = mp.solutions.pose.Pose(
-            static_image_mode=False,
-            model_complexity=1,
-            smooth_landmarks=True,
-            min_detection_confidence=0.7,
-            min_tracking_confidence=0.7
+        model_path = _get_model_path()
+        base_options = mp_python.BaseOptions(
+            model_asset_path=model_path,
+            delegate=mp_python.BaseOptions.Delegate.CPU,
         )
+        options = vision.PoseLandmarkerOptions(
+            base_options=base_options,
+            running_mode=vision.RunningMode.IMAGE,
+            min_pose_detection_confidence=0.6,
+            min_pose_presence_confidence=0.6,
+            min_tracking_confidence=0.6,
+            output_segmentation_masks=False,
+        )
+        self._landmarker = vision.PoseLandmarker.create_from_options(options)
 
         self._detectors = {
             "Squats": SquatDetector(),
@@ -50,21 +67,16 @@ class VideoProcessorClass(VideoProcessorBase):
         with self._lock:
             return self._exercise_type
 
-    def _draw_skeleton(self, img, landmarks_list):
+    def _draw_skeleton(self, img, landmarks):
         h, w = img.shape[:2]
-        landmarks = landmarks_list.landmark
-
         for start_idx, end_idx in POSE_CONNECTIONS:
             p1 = landmarks[start_idx]
             p2 = landmarks[end_idx]
             if p1.visibility > 0.7 and p2.visibility > 0.7:
-                cv2.line(
-                    img,
-                    (int(p1.x * w), int(p1.y * h)),
-                    (int(p2.x * w), int(p2.y * h)),
-                    (0, 255, 0), 8
-                )
-
+                cv2.line(img,
+                         (int(p1.x * w), int(p1.y * h)),
+                         (int(p2.x * w), int(p2.y * h)),
+                         (0, 255, 0), 8)
         for lm in landmarks:
             if lm.visibility > 0.7:
                 cv2.circle(img, (int(lm.x * w), int(lm.y * h)), 8, (255, 0, 0), -1)
@@ -96,16 +108,17 @@ class VideoProcessorClass(VideoProcessorBase):
     def recv(self, frame):
         image = np.asarray(cv2.flip(frame.to_ndarray(format="bgr24"), 1), dtype=np.uint8)
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        result = self._pose.process(rgb)
+
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        result = self._landmarker.detect(mp_image)
 
         if result.pose_landmarks:
-            self._draw_skeleton(image, result.pose_landmarks)
+            landmarks = result.pose_landmarks[0]
+            self._draw_skeleton(image, landmarks)
+
             ex_type = self.get_exercise()
             detector = self._detectors.get(ex_type)
-
             if detector:
-                # Convert to same format detectors expect
-                landmarks = result.pose_landmarks.landmark
                 metrics = detector.process(landmarks)
                 metrics["pose_detected"] = True
                 self._draw_overlays(image, metrics, ex_type)
