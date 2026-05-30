@@ -22,7 +22,10 @@ class VideoProcessorClass(VideoProcessorBase):
         self._exercise_type = "Squats"
 
         model_path = os.path.join(os.getcwd(), "ml_models", "pose_landmarker_full.task")
-        base_option = python.BaseOptions(model_asset_path=model_path)
+        base_option = python.BaseOptions(
+            model_asset_path=model_path,
+            delegate=python.BaseOptions.Delegate.CPU
+        )
 
         options = vision.PoseLandmarkerOptions(
             base_options=base_option,
@@ -229,4 +232,3 @@ class VideoProcessorClass(VideoProcessorBase):
                     self._latest_metrics = {"pose_detected": False}
 
         return av.VideoFrame.from_ndarray(image, format="bgr24")
-    
